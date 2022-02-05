@@ -1,0 +1,331 @@
+---
+title: 'HW02: Colgate vs Crest'
+author: "Alejandro José Gómez Rivas"
+date: "14/11/2021"
+output:
+  html_document:
+    toc: yes
+    toc_depth: '2'
+    df_print: paged
+  html_notebook:
+    highlight: kate
+    toc: yes
+    toc_depth: 2
+  word_document:
+    toc: yes
+    toc_depth: '2'
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+---
+
+
+
+```{css, echo = FALSE}
+.redbox {
+  border: 1px solid rgb(0, 102, 102);
+  padding: 10px 10px;
+  background-color: #ffbbbb;
+    border-radius: 5px;
+}
+
+
+.hr1 {
+    display: block;
+    height: 6px;
+    border: 0;
+    border-top: 4px solid rgba(255, 69, 0, 0.7);
+    margin: 1em 0;
+    padding: 0;
+}
+
+```
+
+## Librerías recurridas
+
+```{r, echo = FALSE}
+library(tidyverse)
+library(forecast)
+library(tsibble)
+library(feasts)
+library(tsoutliers)
+library(TSA)
+library(xts)
+library(readxl)
+library(janitor)
+library(stringr)
+library(lubridate)
+library(dynlm)
+```
+
+## Lectura de data.xlsx
+
+Como primer paso, separo el conjunto de datos de Colgate y Crest en series temporales, y para aplicar las muestras de train y de test del modelo, especifico la fecha del comienzo y del final. Al tener una frecuencia semanal, en frequency coloco un valor de 52.18 ya que es el número de semanas que tiene aproximadamente un año convencional.
+
+```{r, echo = FALSE}
+# Nada más ejecutar los datos, se aplica la función clean_names para que estén
+# los nombres bien:
+data <- read_xlsx("data.xlsx") %>% 
+  clean_names()
+
+# Se pone la serie general como time series y la frecuencia 52'18 mencionada
+# anteriormente:
+colgate_ts <- ts(data$colgate, start = c(1958,1), frequency = 52.18)
+
+# Se crea una tabla con la serie de colgate_ts:
+colgate_ts_tsibble <- as_tsibble(colgate_ts)
+
+# Se crea colgate_ts_train como la muestra de train:
+colgate_ts_train <- ts(data$colgate, start = c(1958,1), end=c(1962,52), 
+                       frequency = 52)
+
+# Ahora la muestra de test (colgate_ts_test):
+colgate_ts_test <- tail(colgate_ts,16)
+
+# A continuación, se realiza el mismo mecanismo pero con los datos de Crest:
+
+# Serie general como time series:
+crest_ts <- ts(data$crest, start = c(1958,1), frequency = 52.18)
+
+# Tabla con la serie de crest_ts.
+crest_ts_tsibble <- as_tsibble(crest_ts)
+
+# Muestra de train de Crest:
+crest_ts_train <- ts(data$crest, start = c(1958,1), end=c(1962,52),
+                     frequency = 52)
+
+# Muestra de test de Crest:
+crest_ts_test <- tail(crest_ts,16)
+
+# Por último, se hace una tabla adjuntando los datos de Colgate y Crest con el 
+# objetivo de hacer más adelante tablas comparativas:
+data_ts <- crest_ts_tsibble %>% 
+  mutate(value_2 = colgate_ts_tsibble$value)
+  data_ts_tsibble <- as_tsibble(data_ts)
+
+
+colgate_ts_train
+colgate_ts_test
+crest_ts_train
+crest_ts_test
+```
+
+Se hacen las gráficas mostrando las cuotas de mercado de Colgate y de Crest:
+
+```{r}
+ggplot(colgate_ts_tsibble)+
+  geom_line(aes(x=index, y=value), colour="green")+
+  ylab("Cuota Mercado Colgate")+
+  xlab("Semana")
+
+ggplot(crest_ts_tsibble)+
+  geom_line(aes(x=index, y=value), colour="red")+
+  ylab("Cuota Mercado Crest")+
+  xlab("Semana")
+
+ggplot(data_ts)+
+  geom_line(aes(x=index, y=value), colour="red")+
+  geom_line(aes(x=index, y=value_2), colour="green")+
+  ylab("Cuota Mercado")+
+  xlab("Semana")
+
+```
+Como aspectos a destacar al echar un vistazo a las gráficas, se puede apreciar una pronunciada cuota de mercado de Colgate al principio, por encima del 40%, pero a partir del 1 de agosto de 1960, gracias a la aprobación del Consejo de Terapéutica Dental de la ADA (American Dental Association) a Crest de P&G al catalogarla como una ayuda importante dentro del sector de higiene dental, ligado a una sólida campaña de marketing por parte de la propia marca aprovechando este hecho, aumentó significativamente su cuota de mercado, consiguiendo desbancar a Colgate.
+
+## ARIMA
+
+A continuación, se realiza la estimación del modelo, pero antes se dejará graficada la serie de Crest con ACF y PACF:  
+```{r}
+tsdisplay(colgate_ts_train)
+```
+
+```{r}
+tsdisplay(crest_ts_train)
+```
+
+Como se aprecian, las series no poseen ruido blanco.
+
+A continuación, se procede a estimar ARIMA de Colgate y Crest con la función AutoARIMA y el teorema de Ljung-Box, que indicará si existe dependencia entrelos residuos estimados, o sea, si dichos residuos presentan correlación no nula.
+
+Si la p-value es < 0.05, hay correlación entre los residuos, y si es > 0.05, no lo habrá.
+
+```{r}
+#ARIMA de Colgate
+arima_colgate <- auto.arima(colgate_ts_train,lambda = 0)
+summary(arima_colgate)
+
+#residual analysis
+ggtsdisplay(arima_colgate$residuals)
+
+#box-Ljung Test
+Box.test(arima_colgate$residuals,lag = 52, fitdf = 0, type="Lj")
+
+# Forecast
+forecast_colgate=forecast(arima_colgate)
+
+autoplot(forecast_colgate)+ggtitle("ARIMA: Predicción de Colgate")
+
+print(forecast_colgate)
+```
+
+```{r, echo = FALSE}
+#ARIMA de Crest
+arima_crest <- auto.arima(crest_ts_train,lambda = 0)
+summary(arima_crest)
+
+#residual analysis
+ggtsdisplay(arima_crest$residuals)
+
+#box-Ljung Test
+Box.test(arima_crest$residuals,lag = 52, fitdf = 0, type="Lj")
+
+# Forecast
+forecast_crest=forecast(arima_crest)
+
+autoplot(forecast_crest)+ggtitle("ARIMA: Predicción de Crest")
+
+```
+
+El (3, 1, 0) del ARIMA de Crest es un componente autorregresivo, y (1, 0, 0) es  componente autorregresivo estacional.
+
+## Outliers
+
+Ahora se van a indicar los outliers que pueden aparecer en el modelo, que pueden ser de tipo AO (Additive Outlier), LS (Level Shift) y TC (Temporary Change):
+
+```{r}
+# Outliers Colgate
+tso(y = as.ts(colgate_ts_train), types = c("AO", "LS", "TC"),discard.method = "bottom-up", tsmethod = "auto.arima", args.tsmethod = list(allowdrift = FALSE, ic = "bic"))
+
+```
+El outlier de tipo LS da como resultado un número negativo, dentro de la semana 136, que coincide cuando el Consejo de Terapéutica Dental de la ADA recomienda a Crest. En este caso hay que realizar un modelo de intervención para este outlier, ya que existen motivos y no es atípico.
+
+```{r}
+# Outliers Crest
+tso(y = as.ts(crest_ts_train), types = c("AO", "LS", "TC"),discard.method = "bottom-up", tsmethod = "auto.arima", args.tsmethod = list(allowdrift = FALSE, ic = "bic"))
+
+```
+Aquí ocurre el mismo motivo que con Colgate, pero esta vez a favor de Crest. También habría que realizar un modelo de intervención al no haber datos atípicos.
+
+## Modelo de intervención de Colgate
+
+Como se ha comentado antes, se realiza el modelo de intervenciónl. Primero se crea un DF que coge los outliers y los convierte en dummies y, por último, se añade el componente estacional que se mencionó anteriormente al AR(3)
+```{r}
+int_data=as.ts(colgate_ts)
+dummies=data.frame(
+          LS6032=1*(seq(colgate_ts)>=136),
+          AO5950=1*(seq(colgate_ts)==102))
+mod_int=arimax(int_data,order=c(3,0,0),
+               seasonal=list(order=c(1,0,0),period=52),
+        xreg=dummies,
+        method='ML')
+mod_int
+
+```
+
+## Modelo de intervención de Crest
+
+Se realiza el modelo de intervención una vez se han especificado los outliers en el paso anterior. Se crea un data Frame que captura los outliers y los convierte en variables dummy, en función del tipo de outlier que sea.
+```{r}
+int_data=as.ts(crest_ts)
+dummies=data.frame(
+          LS6032=1*(seq(colgate_ts)>=136),
+          AO5950=1*(seq(colgate_ts)==167),
+          TC6140=1*(seq(colgate_ts)==196))
+mod_int=arimax(int_data,order=c(0,1,1),
+        xreg=dummies,
+        method='ML')
+mod_int
+
+```
+## Función de transferencia
+
+```{r}
+mod0=dynlm(colgate_ts_train ~ L(crest_ts_train, 0:15) + L(colgate_ts_train, 1))
+summary(mod0)
+Box.test(mod0$residuals,lag=52, fitdf=0, type="Lj")
+
+```
+
+```{r}
+forecast::tsdisplay(mod0$residuals)
+```
+
+```{r}
+mod0 
+summary(mod0)
+
+```
+
+
+```{r}
+mod0$coef
+plot(mod0$coef[3:18],type="h")
+```
+
+```{r}
+mod <- arimax(colgate_ts_train,
+              order=c(1,0,0),
+              include.mean=TRUE,
+              xtransf=crest_ts_train,
+              
+              transfer=list(c(0,15)),
+              method="ML")
+
+mod
+```
+
+```{r}
+mod$coef
+plot(mod$coef[3:18],type="h")
+
+```
+
+Divides el coefficient entre el SE:
+
+- If coeff/SE > 1, then fixed = NA
+
+- If coeff/SE < 1, then fixed = 0
+
+```{r}
+mod <- arimax(colgate_ts_train,
+              order=c(1,0,1),
+              include.mean=FALSE,
+              #fixed=c(NA,NA, 0, NA, NA, 0),
+              xtransf=crest_ts_train,
+              xreg = crest_ts_train,
+              transfer=list(c(0,0)),
+              method="ML")
+
+summary(mod)
+forecast::tsdisplay(mod$residuals)
+
+
+```
+
+```{r}
+plot(colgate_ts_train,ylab='Colgate train')
+points(fitted(mod))
+```
+
+
+```{r}
+ff <- predict(mod, newxreg = crest_ts_test, n.ahead = 16)
+ff
+```
+```{r}
+as.data.frame(ff)
+```
+
+```{r}
+col_compare2 <- as.data.frame(ff)['pred.Series.1'] 
+col_compare2 <- cbind(col_compare2, as.data.frame(colgate_ts_test))
+colnames(col_compare2) <- c('predicted', 'real')
+
+col_compare2 <- ts(col_compare2)
+autoplot(col_compare2) +
+  ggtitle("Comparación de predicciones (1963)")+
+  labs(y = "Cuota de Mercado (%)", x = 'Semanas de 1963')
+
+  
+
+```
